@@ -685,7 +685,7 @@
                     
                     <div class="detail-row">
                         <div class="detail-label">Status</div>
-                        <0div class="detail-value status" id="detail-status">-</div>
+                        <div class="detail-value status" id="detail-status">-</div>
                     </div>
                     
                     <div class="detail-row">
@@ -746,7 +746,7 @@
     <script>
         class HRDashboardApp {
             constructor() {
-                this.BASE_URL = 'http://52.90.188.151:3090';
+                this.BASE_URL = 'http://44.202.114.151:3090';
                 this.currentRequestId = null;
                 this.currentAction = null;
                 this.allRequests = [];

@@ -910,7 +910,7 @@
     <script>
         class EmployeeBenefitsApp {
             constructor() {
-                this.BASE_URL = 'http://52.90.188.151:3090';
+                this.BASE_URL = 'http://44.202.114.151:3090';
                 this.init();
             }
             
