@@ -5,11 +5,10 @@ const path = require('path');
 const cors = require('cors');
 const multer = require('multer');
 const fs = require('fs');
-
 const app = express();
 const port = process.env.PORT || 3090;
 
-// PostgreSQL connection with retry
+// PostgreSQL connection with retry logic
 const poolConfig = {
   user: process.env.DB_USER || 'postgres',
   host: process.env.DB_HOST || 'postgres',
@@ -20,6 +19,8 @@ const poolConfig = {
 
 const createPoolWithRetry = () => {
   const pool = new Pool(poolConfig);
+  
+  // Test the connection
   pool.query('SELECT 1')
     .then(() => console.log('Connected to PostgreSQL'))
     .catch(async (err) => {
@@ -28,34 +29,41 @@ const createPoolWithRetry = () => {
       await new Promise(resolve => setTimeout(resolve, 5000));
       return createPoolWithRetry();
     });
+  
   return pool;
 };
 
 const pool = createPoolWithRetry();
 
-// Create uploads directory if not exists
-const uploadDir = path.join(__dirname, 'Uploads');
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
-
 // Multer setup for file uploads
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, 'Uploads/'),
+  destination: (req, file, cb) => {
+    cb(null, 'Uploads/');
+  },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
     cb(null, uniqueSuffix + path.extname(file.originalname));
   },
 });
 
+const uploadDir = path.join(__dirname, 'Uploads');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
 const upload = multer({
   storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
   fileFilter: (req, file, cb) => {
+    if (!file) {
+      return cb(null, true);
+    }
     const filetypes = /pdf|jpg|jpeg|png/;
     const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
     const mimetype = filetypes.test(file.mimetype);
-    if (extname && mimetype) return cb(null, true);
+    if (extname && mimetype) {
+      return cb(null, true);
+    }
     cb(new Error('Only PDF, JPG, JPEG, and PNG files are allowed'));
   },
 });
@@ -64,13 +72,13 @@ const upload = multer({
 app.use(cors({
   origin: [
     process.env.FRONTEND_URL,
-    "http://52.90.188.151:3090",
+    "http://44.202.114.151:3090",
     "http://127.0.0.1:5500",
-    "http://52.90.188.151:5500",
+    "http://44.202.114.151:5500",
     "http://127.0.0.1:5501",
     "http://127.0.0.1:5503",
-    "http://52.90.188.151:8140",
-    "http://52.90.188.151:8141",
+    "http://44.202.114.151:8140",
+    "http://44.202.114.151:8141",
   ],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
@@ -81,22 +89,32 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/Uploads', express.static(path.join(__dirname, 'Uploads')));
 
-// Download route
+// Route to handle file downloads
 app.get('/download/:filename', (req, res) => {
-  let filename = req.params.filename.replace(/\\/g, '/').split('/').pop();
+  let filename = req.params.filename;
+  // Normalize filename to handle both forward and backslashes
+  filename = filename.replace(/\\/g, '/').split('/').pop();
   const filePath = path.join(__dirname, 'Uploads', filename);
+  console.log('Requested file path:', filePath);
 
   fs.access(filePath, fs.constants.F_OK, (err) => {
-    if (err) return res.status(404).json({ error: 'File not found' });
+    if (err) {
+      console.error('File access error:', err);
+      return res.status(404).json({ error: 'File not found' });
+    }
 
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.sendFile(filePath, err => {
-      if (err) res.status(500).json({ error: 'Error sending file', details: err.message });
+    res.sendFile(filePath, (err) => {
+      if (err) {
+        console.error('Error sending file:', err);
+        return res.status(500).json({ error: 'Error downloading file', details: err.message });
+      }
+      console.log(`File ${filename} sent successfully`);
     });
   });
 });
 
-// Initialize requests table
+// Create requests table if not exists
 async function initializeDatabase() {
   try {
     await pool.query(`
@@ -122,6 +140,7 @@ async function initializeDatabase() {
   }
 }
 
+// Initialize the database
 initializeDatabase();
 
 // API Routes
@@ -132,6 +151,7 @@ app.post('/api/requests', upload.single('document'), async (req, res) => {
     const { name, email, empId, program, program_time, date, reason, loan_type, amount } = req.body;
     const documentPath = req.file ? `Uploads/${req.file.filename}` : null;
 
+    // Check for duplicate request for one-time programs
     const oneTimePrograms = [
       'Yoga and Meditation',
       'Mental Health Support',
@@ -139,7 +159,6 @@ app.post('/api/requests', upload.single('document'), async (req, res) => {
       'Health Checkup Camps',
       'Gym Membership',
     ];
-
     if (oneTimePrograms.includes(program)) {
       const check = await pool.query(
         'SELECT * FROM requests WHERE emp_id = $1 AND program = $2 AND status != $3',
@@ -181,14 +200,7 @@ app.get('/api/requests', async (req, res) => {
 app.get('/api/requests/emp/:empId', async (req, res) => {
   try {
     const { empId } = req.params;
-    if (!empId) {
-      return res.status(400).json({ error: 'Employee ID is required' });
-    }
-
-    const result = await pool.query(
-      'SELECT * FROM requests WHERE emp_id = $1 ORDER BY request_date DESC',
-      [empId]
-    );
+    const result = await pool.query('SELECT * FROM requests WHERE emp_id = $1 ORDER BY request_date DESC', [empId]);
     res.json(result.rows);
   } catch (err) {
     console.error('Error fetching requests by empId:', err);
@@ -201,16 +213,13 @@ app.put('/api/requests/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
-
     const result = await pool.query(
       'UPDATE requests SET status = $1 WHERE id = $2 RETURNING *',
       [status, id]
     );
-
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Request not found' });
     }
-
     res.json(result.rows[0]);
   } catch (err) {
     console.error('Error updating request:', err);
@@ -218,7 +227,7 @@ app.put('/api/requests/:id', async (req, res) => {
   }
 });
 
-// Serve frontend pages
+// Serve HTML pages
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'Frontend', 'index.html'));
 });
@@ -229,10 +238,9 @@ app.get('/hr', (req, res) => {
 
 // Start server
 app.listen(port, () => {
-  console.log(`Server running on http://52.90.188.151:${port}`);
+  console.log(`Server running on http://44.202.114.151:${port}`);
 });
 
-// Graceful shutdown
 process.on('SIGINT', () => {
   pool.end();
   process.exit();
